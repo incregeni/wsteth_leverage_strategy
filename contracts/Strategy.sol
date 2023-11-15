@@ -73,25 +73,28 @@ contract Strategy is IStrategy, AccessControl, ERC4626 {
             (IAavePool(aavePool).getConfiguration(asset()).data << 240) >> 240
         );
 
-        uint256 totalWstETHCollateralAmount = _totalWstETHCollateralAmount();
-        if (expectedPositionSize == totalWstETHCollateralAmount)
-            return (0, 0, true);
-        else if (expectedPositionSize > totalWstETHCollateralAmount) {
-            adjustedWstETHAmount =
-                expectedPositionSize -
-                totalWstETHCollateralAmount;
-            adjustedETHAmount = _leverage(
+        uint256 totalWstETHAmount = _totalWstETHCollateralAmount();
+        if (expectedPositionSize == totalWstETHAmount) return (0, 0, true);
+        else if (expectedPositionSize > totalWstETHAmount) {
+            adjustedWstETHAmount = expectedPositionSize - totalWstETHAmount;
+            (adjustedETHAmount, adjustedWstETHAmount) = _leverage(
                 adjustedWstETHAmount,
+                0,
                 0,
                 ltvPercent,
                 0,
                 recurringCallLimit
             );
+            console.log(
+                "*** Desired wstETH amount : ",
+                expectedPositionSize - totalWstETHAmount
+            );
+            console.log("*** adjustedWstETHAmount : ", adjustedWstETHAmount);
+            console.log("*** totalAssets : ", totalAssets());
+
             isLeveraged = true;
         } else {
-            adjustedWstETHAmount =
-                totalWstETHCollateralAmount -
-                expectedPositionSize;
+            adjustedWstETHAmount = totalWstETHAmount - expectedPositionSize;
             adjustedETHAmount = _deleverage(adjustedWstETHAmount);
             isLeveraged = false;
         }
@@ -128,6 +131,11 @@ contract Strategy is IStrategy, AccessControl, ERC4626 {
         uint256 unwrappedWETHAmount = _unwrap(wstETHAmount);
         console.log("*** unwrappedWETHAmount : ", unwrappedWETHAmount);
 
+        require(
+            unwrappedWETHAmount >= (amount + premium),
+            "Too little unwrapped"
+        );
+
         SafeERC20.safeIncreaseAllowance(
             IERC20(WETH),
             aavePool,
@@ -140,23 +148,17 @@ contract Strategy is IStrategy, AccessControl, ERC4626 {
     function _leverage(
         uint256 wstETHAmount,
         uint256 newlyBorrowedETH,
+        uint256 newlyDepositedWstETH,
         uint16 ltvPercent,
         uint8 callCounter,
         uint8 callCountLimit
-    ) internal returns (uint256) {
-        if (callCounter > callCountLimit) return newlyBorrowedETH;
-        uint256 desiredETHAmount = (wstETHAmount *
-            (10 ** IWstETH(asset()).decimals())) / _price();
+    ) internal returns (uint256, uint256) {
+        console.log("callCounter : ", callCounter);
+        if (callCounter > callCountLimit)
+            return (newlyBorrowedETH, newlyDepositedWstETH);
+        uint256 desiredETHAmount = ((wstETHAmount * (_price())) /
+            10 ** IWstETH(asset()).decimals());
 
-        console.log("*** wstETHAmount : ", wstETHAmount);
-        console.log(
-            "*** _totalWstETHCollateralAmount : ",
-            _totalWstETHCollateralAmount()
-        );
-        console.log("*** _priceTolerance() : ", _priceTolerance());
-        console.log("*** ltvPercent : ", ltvPercent);
-        console.log("*** PERCENTAGE_FACTOR : ", PERCENTAGE_FACTOR);
-        console.log("*** _totalETHDebtAmount() : ", _totalETHDebtAmount());
         uint256 maximumBorrowableAmount = (_totalWstETHCollateralAmount() *
             _priceTolerance() * // here I used priceTolerance instead of price because priceTolerance is littler smaller than price and it will help to protect liquidation
             ltvPercent) /
@@ -167,10 +169,8 @@ contract Strategy is IStrategy, AccessControl, ERC4626 {
         uint256 borrowETHAmount = desiredETHAmount > maximumBorrowableAmount
             ? maximumBorrowableAmount
             : desiredETHAmount;
-        console.log("*** desiredETHAmount : ", desiredETHAmount);
-        console.log("*** maximumBorrowableAmount : ", maximumBorrowableAmount);
-        console.log("*** borrowETHAmount : ", borrowETHAmount);
-        if (borrowETHAmount == 0) return newlyBorrowedETH;
+        if (borrowETHAmount == 0)
+            return (newlyBorrowedETH, newlyDepositedWstETH);
         IAavePool(aavePool).borrow(
             WETH,
             borrowETHAmount,
@@ -193,14 +193,15 @@ contract Strategy is IStrategy, AccessControl, ERC4626 {
         if (desiredETHAmount > maximumBorrowableAmount) {
             return
                 _leverage(
-                    desiredETHAmount - borrowETHAmount,
+                    wstETHAmount - mintedWstETHAmount,
                     newlyBorrowedETH + borrowETHAmount,
+                    newlyDepositedWstETH + mintedWstETHAmount,
                     ltvPercent,
                     callCounter + 1,
                     callCountLimit
                 );
         }
-        return desiredETHAmount;
+        return (desiredETHAmount, newlyDepositedWstETH + mintedWstETHAmount);
     }
 
     /// @notice Deleverage position with flashloan
@@ -250,8 +251,8 @@ contract Strategy is IStrategy, AccessControl, ERC4626 {
     ) internal override {
         uint256 repayETHAmount = (_totalETHDebtAmount() * shares) /
             totalSupply();
-        uint256 repayWstETHAmount = (_totalETHDebtAmount() *
-            (10 ** IWstETH(asset()).decimals())) / _price();
+        uint256 repayWstETHAmount = (repayETHAmount *
+            (10 ** IWstETH(asset()).decimals())) / _priceTolerance();
         uint256 userWstETHAmount = (_totalWstETHCollateralAmount() * shares) /
             totalSupply();
         IAavePool(aavePool).flashLoanSimple(
@@ -261,6 +262,11 @@ contract Strategy is IStrategy, AccessControl, ERC4626 {
             abi.encode(repayWstETHAmount),
             0
         );
+
+        console.log("*** repayETHAmount : ", repayETHAmount);
+        console.log("*** repayWstETHAmount : ", repayWstETHAmount);
+        console.log("*** userWstETHAmount : ", userWstETHAmount);
+
         uint256 resultWstETHAmount = userWstETHAmount - repayWstETHAmount;
         IAavePool(aavePool).withdraw(
             asset(),
@@ -352,12 +358,22 @@ contract Strategy is IStrategy, AccessControl, ERC4626 {
 
     /// @notice Price which is used for swap via DEX (uniswap)
     function _priceTolerance() internal view returns (uint256) {
-        return (_price() * 98) / 100;
+        return (_price() * 99) / 100;
     }
 
     /// @notice WstETH redemption price for ETH
     function _price() internal view returns (uint256) {
         return IWstETH(asset()).stEthPerToken();
+    }
+
+    /// @notice public view function to show contract's current position
+    function totalWstETHCollateralAmount() public view returns (uint256) {
+        return _totalWstETHCollateralAmount();
+    }
+
+    /// @notice Getter function for total WETH debt amount of this contract in Aave(v3)
+    function totalETHDebtAmount() public view returns (uint256) {
+        return _totalETHDebtAmount();
     }
 
     /// @notice receive function to receive eth

@@ -29,4 +29,8 @@ interface IStrategy is IFlashLoanSimpleReceiver {
             uint256 adjustedETHAmount,
             bool isLeveraged
         );
+
+    function totalWstETHCollateralAmount() external view returns (uint256);
+
+    function totalETHDebtAmount() external view returns (uint256);
 }

@@ -18,6 +18,12 @@ describe("Strategy", function () {
   const PERCENTAGE_FACTOR = 10000;
   const RECURRING_CALL_LIMIT = 8;
 
+    
+  const checkPositionValid = (totalAsset: any, totalWstETHAmount: any, leverageRatio: any) => {
+    expect(totalWstETHAmount.mul(10000).div(totalAsset).toNumber() / 10000).to.be.at.most(Number(leverageRatio * 101 / 100));
+    expect(totalWstETHAmount.mul(10000).div(totalAsset).toNumber() / 10000).to.be.at.least(Number(leverageRatio * 99 / 100));
+  }
+
   before(async function () {
     [this.owner, this.alice, this.bob] = await ethers.getSigners();
     console.log("Owner's Address : ", this.owner.address);
@@ -70,6 +76,7 @@ describe("Strategy", function () {
 
       console.log("Bob's share amount : ", await this.strategyContract.balanceOf(this.bob.address));
       console.log("TotalAssets in Strategy : ", await this.strategyContract.totalAssets());
+      console.log("Strategy's TotalWstETH Position : ", await this.strategyContract.totalWstETHCollateralAmount());
     });
     it("deposit3", async function () {
       await this.WstETH.connect(this.owner).approve(this.strategyContract.address, ethers.utils.parseUnits("10", BASIC_DECIMALS));
@@ -77,6 +84,7 @@ describe("Strategy", function () {
 
       console.log("Owner's share amount : ", await this.strategyContract.balanceOf(this.owner.address));
       console.log("TotalAssets in Strategy : ", await this.strategyContract.totalAssets());
+      console.log("Strategy's TotalWstETH Position : ", await this.strategyContract.totalWstETHCollateralAmount());
     });
   });
   
@@ -86,12 +94,27 @@ describe("Strategy", function () {
       await this.strategyContract.harvest(RECURRING_CALL_LIMIT);
       
       console.log("TotalAssets in Strategy : ", await this.strategyContract.totalAssets());
+      console.log("Strategy's TotalWstETH Position : ", await this.strategyContract.totalWstETHCollateralAmount());
+      checkPositionValid(await this.strategyContract.totalAssets(), await this.strategyContract.totalWstETHCollateralAmount(), 2);
     });
     it("harvest-deleverage", async function () {
       await this.strategyContract.setLeverageRatio(PERCENTAGE_FACTOR * 1.5);  /// set leverage as 1.5x
       await this.strategyContract.harvest(RECURRING_CALL_LIMIT);
       
       console.log("TotalAssets in Strategy : ", await this.strategyContract.totalAssets());
+      console.log("Strategy's TotalWstETH Position : ", await this.strategyContract.totalWstETHCollateralAmount());
+      checkPositionValid(await this.strategyContract.totalAssets(), await this.strategyContract.totalWstETHCollateralAmount(), 1.5);
+    });
+  });
+  describe("Withdraw", async function () {
+    it("withdraw", async function () {
+      await this.strategyContract.connect(this.alice).withdraw(ethers.utils.parseUnits("5", BASIC_DECIMALS), this.alice.address, this.alice.address);
+
+      console.log("Alice's share amount : ", await this.strategyContract.balanceOf(this.alice.address));
+      console.log("TotalAssets in Strategy : ", await this.strategyContract.totalAssets());
+      console.log("Strategy's TotalWstETH Position : ", await this.strategyContract.totalWstETHCollateralAmount());
+      console.log(typeof(await this.strategyContract.totalWstETHCollateralAmount()));
+      checkPositionValid(await this.strategyContract.totalAssets(), await this.strategyContract.totalWstETHCollateralAmount(), 1.5);
     });
   });
 });
