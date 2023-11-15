@@ -4,18 +4,6 @@ pragma solidity ^0.8.20;
 import "./IFlashLoanSimpleReceiver.sol";
 
 interface IStrategy is IFlashLoanSimpleReceiver {
-    event LeverageRatioChanged(
-        uint256 indexed oldRatio,
-        uint256 indexed newRatio
-    );
-
-    event Harvested(
-        address indexed manager,
-        uint256 adjustedWstETHAmount,
-        uint256 adjustedETHAmount,
-        bool indexed isLeveraged
-    );
-
     /// @notice Managers can set leverage ratio
     function setLeverageRatio(uint256 _ratio) external;
 
@@ -33,4 +21,20 @@ interface IStrategy is IFlashLoanSimpleReceiver {
     function totalWstETHCollateralAmount() external view returns (uint256);
 
     function totalETHDebtAmount() external view returns (uint256);
+
+    function estimatedUserPosition(
+        address user
+    ) external view returns (uint256 witdrawableWstETHAmount);
+
+    event LeverageRatioChanged(
+        uint256 indexed oldRatio,
+        uint256 indexed newRatio
+    );
+
+    event Harvested(
+        address indexed manager,
+        uint256 adjustedWstETHAmount,
+        uint256 adjustedETHAmount,
+        bool indexed isLeveraged
+    );
 }

@@ -46,6 +46,10 @@ contract Strategy is IStrategy, AccessControl, ERC4626 {
 
     /// @notice Managers can set leverage ratio
     function setLeverageRatio(uint256 _ratio) external onlyRole(MANAGER_ROLE) {
+        require(
+            _ratio >= (PERCENTAGE_FACTOR * 11) / 10, //  set lowset leverage ratio as 1.1x
+            "Too low leverage ratio"
+        );
         uint256 old = leverageRatio;
         leverageRatio = _ratio;
         emit LeverageRatioChanged(old, leverageRatio);
@@ -65,7 +69,7 @@ contract Strategy is IStrategy, AccessControl, ERC4626 {
     {
         require(
             recurringCallLimit <= RECURRING_CALL_LIMIT,
-            "Too big call limit"
+            "Too big recurring call limit"
         );
         uint256 expectedPositionSize = (totalAssets() * leverageRatio) /
             PERCENTAGE_FACTOR;
@@ -85,12 +89,6 @@ contract Strategy is IStrategy, AccessControl, ERC4626 {
                 0,
                 recurringCallLimit
             );
-            console.log(
-                "*** Desired wstETH amount : ",
-                expectedPositionSize - totalWstETHAmount
-            );
-            console.log("*** adjustedWstETHAmount : ", adjustedWstETHAmount);
-            console.log("*** totalAssets : ", totalAssets());
 
             isLeveraged = true;
         } else {
@@ -116,7 +114,6 @@ contract Strategy is IStrategy, AccessControl, ERC4626 {
         address,
         bytes calldata params
     ) external returns (bool) {
-        console.log("*** amount + premium : ", amount + premium);
         SafeERC20.safeIncreaseAllowance(IERC20(assetAddress), aavePool, amount);
         IAavePool(aavePool).repay(
             assetAddress,
@@ -129,17 +126,28 @@ contract Strategy is IStrategy, AccessControl, ERC4626 {
         IAavePool(aavePool).withdraw(asset(), wstETHAmount, address(this));
 
         uint256 unwrappedWETHAmount = _unwrap(wstETHAmount);
-        console.log("*** unwrappedWETHAmount : ", unwrappedWETHAmount);
 
         require(
             unwrappedWETHAmount >= (amount + premium),
             "Too little unwrapped"
         );
-
+        uint256 dustWETHAmount = unwrappedWETHAmount - (amount + premium);
+        uint256 wrappedWstETHAmount = _wrap(dustWETHAmount);
+        SafeERC20.safeIncreaseAllowance(
+            IERC20(asset()),
+            aavePool,
+            wrappedWstETHAmount
+        );
+        IAavePool(aavePool).supply(
+            asset(),
+            wrappedWstETHAmount,
+            address(this),
+            0
+        );
         SafeERC20.safeIncreaseAllowance(
             IERC20(WETH),
             aavePool,
-            unwrappedWETHAmount
+            amount + premium
         );
         return true;
     }
@@ -153,7 +161,6 @@ contract Strategy is IStrategy, AccessControl, ERC4626 {
         uint8 callCounter,
         uint8 callCountLimit
     ) internal returns (uint256, uint256) {
-        console.log("callCounter : ", callCounter);
         if (callCounter > callCountLimit)
             return (newlyBorrowedETH, newlyDepositedWstETH);
         uint256 desiredETHAmount = ((wstETHAmount * (_price())) /
@@ -263,10 +270,6 @@ contract Strategy is IStrategy, AccessControl, ERC4626 {
             0
         );
 
-        console.log("*** repayETHAmount : ", repayETHAmount);
-        console.log("*** repayWstETHAmount : ", repayWstETHAmount);
-        console.log("*** userWstETHAmount : ", userWstETHAmount);
-
         uint256 resultWstETHAmount = userWstETHAmount - repayWstETHAmount;
         IAavePool(aavePool).withdraw(
             asset(),
@@ -349,10 +352,7 @@ contract Strategy is IStrategy, AccessControl, ERC4626 {
                 sqrtPriceLimitX96: 0
             });
 
-        // console.log("*** unwrap/amountOut : ", amountOut);
         uint256 amountOut = ISwapRouter(swapRouter).exactInputSingle(params);
-        // console.log("*** unwrap/amountOut : ", amountOut);
-
         return amountOut;
     }
 
@@ -374,6 +374,14 @@ contract Strategy is IStrategy, AccessControl, ERC4626 {
     /// @notice Getter function for total WETH debt amount of this contract in Aave(v3)
     function totalETHDebtAmount() public view returns (uint256) {
         return _totalETHDebtAmount();
+    }
+
+    /// @notice return user's estimated witdrawable WstETH amount
+    /// It is not exact amount, just estimated value
+    function estimatedUserPosition(
+        address user
+    ) public view returns (uint256 witdrawableWstETHAmount) {
+        return ((totalAssets() * balanceOf(user)) / totalSupply());
     }
 
     /// @notice receive function to receive eth

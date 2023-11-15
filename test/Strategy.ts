@@ -15,6 +15,7 @@ describe("Strategy", function () {
   const UNI_POOL_FEE = 100; // for WstETH/ETH pool
   const BASIC_DECIMALS = 18;
   const ETH_SWAP_AMOUNT = ethers.utils.parseUnits("100", BASIC_DECIMALS);
+  const BASIC_DEPOSIT_AMOUNT = ethers.utils.parseUnits("10", BASIC_DECIMALS);
   const PERCENTAGE_FACTOR = 10000;
   const RECURRING_CALL_LIMIT = 8;
 
@@ -26,14 +27,10 @@ describe("Strategy", function () {
 
   before(async function () {
     [this.owner, this.alice, this.bob] = await ethers.getSigners();
-    console.log("Owner's Address : ", this.owner.address);
-    console.log("Alice's Address : ", this.alice.address);
-    console.log("Bob's Address : ", this.alice.address);
 
     const Strategy = await ethers.getContractFactory("Strategy");
     this.strategyContract = await Strategy.deploy(WSTETH_ADDRESS, AAVE_POOL_ADDRESS, UNI_ROUTER_ADDRESS, UNI_POOL_FEE);
     await this.strategyContract.deployed();
-    console.log("Strategy contract deployed to : ", this.strategyContract.address);
 
     /// get WETH for test
     this.WETH = await ethers.getContractAt("IWETH9", WETH_ADDRESS);
@@ -59,62 +56,76 @@ describe("Strategy", function () {
     });
     await this.WstETH.connect(this.alice).transfer(this.owner.address, ETH_SWAP_AMOUNT.mul(10));
     await this.WstETH.connect(this.alice).transfer(this.bob.address, ETH_SWAP_AMOUNT.mul(10));
-    console.log("Alice's WstETHAmount : ", ethers.utils.formatUnits(await this.WstETH.balanceOf(this.alice.address), BASIC_DECIMALS));
   });
 
+  describe("Initialize", async function () {
+    it("setLeverageRatio", async function () {
+      await expect(this.strategyContract.setLeverageRatio(PERCENTAGE_FACTOR)).to.be.revertedWith("Too low leverage ratio");
+      await expect(this.strategyContract.connect(this.alice).setLeverageRatio(PERCENTAGE_FACTOR * 1.2)).to.be.revertedWithCustomError;
+      await this.strategyContract.setLeverageRatio(PERCENTAGE_FACTOR * 3);
+    });
+  });
   describe("Deposit", async function () {
     it("deposit1", async function () {
-      await this.WstETH.connect(this.alice).approve(this.strategyContract.address, ethers.utils.parseUnits("10", BASIC_DECIMALS));
-      await this.strategyContract.connect(this.alice).deposit(ethers.utils.parseUnits("10", BASIC_DECIMALS), this.alice.address);
+      await this.WstETH.connect(this.alice).approve(this.strategyContract.address, BASIC_DEPOSIT_AMOUNT);
+      await this.strategyContract.connect(this.alice).deposit(BASIC_DEPOSIT_AMOUNT, this.alice.address);
 
-      console.log("Alice's share amount : ", await this.strategyContract.balanceOf(this.alice.address));
-      console.log("TotalAssets in Strategy : ", await this.strategyContract.totalAssets());
+      expect(await this.strategyContract.balanceOf(this.alice.address)).to.be.at.most(BASIC_DEPOSIT_AMOUNT);
+      expect(await this.strategyContract.balanceOf(this.alice.address)).to.be.at.least(BASIC_DEPOSIT_AMOUNT.mul(99).div(100));
     });
     it("deposit2", async function () {
-      await this.WstETH.connect(this.bob).approve(this.strategyContract.address, ethers.utils.parseUnits("10", BASIC_DECIMALS));
-      await this.strategyContract.connect(this.bob).deposit(ethers.utils.parseUnits("10", BASIC_DECIMALS), this.bob.address);
+      await this.WstETH.connect(this.bob).approve(this.strategyContract.address, BASIC_DEPOSIT_AMOUNT);
+      await this.strategyContract.connect(this.bob).deposit(BASIC_DEPOSIT_AMOUNT, this.bob.address);
 
-      console.log("Bob's share amount : ", await this.strategyContract.balanceOf(this.bob.address));
-      console.log("TotalAssets in Strategy : ", await this.strategyContract.totalAssets());
-      console.log("Strategy's TotalWstETH Position : ", await this.strategyContract.totalWstETHCollateralAmount());
+      expect(await this.strategyContract.balanceOf(this.alice.address)).to.be.at.most(BASIC_DEPOSIT_AMOUNT);
+      expect(await this.strategyContract.balanceOf(this.alice.address)).to.be.at.least(BASIC_DEPOSIT_AMOUNT.mul(99).div(100));
     });
     it("deposit3", async function () {
-      await this.WstETH.connect(this.owner).approve(this.strategyContract.address, ethers.utils.parseUnits("10", BASIC_DECIMALS));
-      await this.strategyContract.connect(this.owner).deposit(ethers.utils.parseUnits("10", BASIC_DECIMALS), this.owner.address);
+      await this.WstETH.connect(this.owner).approve(this.strategyContract.address, BASIC_DEPOSIT_AMOUNT);
+      await this.strategyContract.connect(this.owner).deposit(BASIC_DEPOSIT_AMOUNT, this.owner.address);
 
-      console.log("Owner's share amount : ", await this.strategyContract.balanceOf(this.owner.address));
-      console.log("TotalAssets in Strategy : ", await this.strategyContract.totalAssets());
-      console.log("Strategy's TotalWstETH Position : ", await this.strategyContract.totalWstETHCollateralAmount());
+      expect(await this.strategyContract.balanceOf(this.alice.address)).to.be.at.most(BASIC_DEPOSIT_AMOUNT);
+      expect(await this.strategyContract.balanceOf(this.alice.address)).to.be.at.least(BASIC_DEPOSIT_AMOUNT.mul(99).div(100));
     });
   });
   
   describe("Harvest", async function () {
+    it("harvest-reverted", async function () {
+      await expect(this.strategyContract.connect(this.alice).harvest(RECURRING_CALL_LIMIT)).to.be.revertedWithCustomError;
+      await expect(this.strategyContract.harvest(13)).to.be.revertedWith("Too big recurring call limit");
+    });
     it("harvest-leverage", async function () {
       await this.strategyContract.setLeverageRatio(PERCENTAGE_FACTOR * 2);  /// set leverage as 2x
       await this.strategyContract.harvest(RECURRING_CALL_LIMIT);
       
-      console.log("TotalAssets in Strategy : ", await this.strategyContract.totalAssets());
-      console.log("Strategy's TotalWstETH Position : ", await this.strategyContract.totalWstETHCollateralAmount());
       checkPositionValid(await this.strategyContract.totalAssets(), await this.strategyContract.totalWstETHCollateralAmount(), 2);
     });
     it("harvest-deleverage", async function () {
       await this.strategyContract.setLeverageRatio(PERCENTAGE_FACTOR * 1.5);  /// set leverage as 1.5x
       await this.strategyContract.harvest(RECURRING_CALL_LIMIT);
-      
-      console.log("TotalAssets in Strategy : ", await this.strategyContract.totalAssets());
-      console.log("Strategy's TotalWstETH Position : ", await this.strategyContract.totalWstETHCollateralAmount());
+
       checkPositionValid(await this.strategyContract.totalAssets(), await this.strategyContract.totalWstETHCollateralAmount(), 1.5);
+    });
+    it("harvest-high-recurring-call", async function () {
+      await this.strategyContract.setLeverageRatio(PERCENTAGE_FACTOR * 4);  /// set leverage as 1.5x
+      await this.strategyContract.harvest(1);
+      await this.strategyContract.setLeverageRatio(PERCENTAGE_FACTOR * 1.5);  /// set leverage as 1.5x
+      await this.strategyContract.harvest(RECURRING_CALL_LIMIT);
     });
   });
   describe("Withdraw", async function () {
     it("withdraw", async function () {
       await this.strategyContract.connect(this.alice).withdraw(ethers.utils.parseUnits("5", BASIC_DECIMALS), this.alice.address, this.alice.address);
 
-      console.log("Alice's share amount : ", await this.strategyContract.balanceOf(this.alice.address));
-      console.log("TotalAssets in Strategy : ", await this.strategyContract.totalAssets());
-      console.log("Strategy's TotalWstETH Position : ", await this.strategyContract.totalWstETHCollateralAmount());
-      console.log(typeof(await this.strategyContract.totalWstETHCollateralAmount()));
       checkPositionValid(await this.strategyContract.totalAssets(), await this.strategyContract.totalWstETHCollateralAmount(), 1.5);
     });
+  });
+  describe("Other", async function () {
+    it("check position", async function () {
+      console.log("total WstETH collateral amount : ", await this.strategyContract.totalWstETHCollateralAmount());
+      console.log("capital WstETH amount : ", await this.strategyContract.totalAssets());
+      console.log("total WETH debt amount : ", await this.strategyContract.totalETHDebtAmount());
+    });
+
   });
 });
