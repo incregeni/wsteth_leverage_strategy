@@ -33,6 +33,18 @@ const config: HardhatUserConfig = {
       },
     ],
   },
+  networks: {
+    hardhat: {
+      forking: {
+        url: "https://rpc.ankr.com/eth",
+        blockNumber: 18578550
+      }
+    },
+    ethereum: {
+      url: "https://rpc.ankr.com/eth",
+      accounts: [],
+    }
+  },
 };
 
 export default config;

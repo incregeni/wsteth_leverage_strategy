@@ -107,15 +107,17 @@ contract Strategy is IStrategy, AccessControl, ERC4626 {
     /// Here the steps are that repay portion of loan with flash borrowed WETH,
     /// withdraw wstETH, and swap wstETH for WETH then repay the flashloan
     function executeOperation(
-        address[] calldata assets,
-        uint256[] calldata amounts,
-        uint256[] calldata premiums,
+        address assetAddress,
+        uint256 amount,
+        uint256 premium,
         address,
         bytes calldata params
     ) external returns (bool) {
+        console.log("*** amount + premium : ", amount + premium);
+        SafeERC20.safeIncreaseAllowance(IERC20(assetAddress), aavePool, amount);
         IAavePool(aavePool).repay(
-            assets[0],
-            amounts[0],
+            assetAddress,
+            amount,
             INTEREST_RATE_MODE,
             address(this)
         );
@@ -124,6 +126,7 @@ contract Strategy is IStrategy, AccessControl, ERC4626 {
         IAavePool(aavePool).withdraw(asset(), wstETHAmount, address(this));
 
         uint256 unwrappedWETHAmount = _unwrap(wstETHAmount);
+        console.log("*** unwrappedWETHAmount : ", unwrappedWETHAmount);
 
         SafeERC20.safeIncreaseAllowance(
             IERC20(WETH),
@@ -145,6 +148,7 @@ contract Strategy is IStrategy, AccessControl, ERC4626 {
         uint256 desiredETHAmount = (wstETHAmount *
             (10 ** IWstETH(asset()).decimals())) / _price();
 
+        console.log("*** wstETHAmount : ", wstETHAmount);
         console.log(
             "*** _totalWstETHCollateralAmount : ",
             _totalWstETHCollateralAmount()
@@ -154,9 +158,10 @@ contract Strategy is IStrategy, AccessControl, ERC4626 {
         console.log("*** PERCENTAGE_FACTOR : ", PERCENTAGE_FACTOR);
         console.log("*** _totalETHDebtAmount() : ", _totalETHDebtAmount());
         uint256 maximumBorrowableAmount = (_totalWstETHCollateralAmount() *
-            _priceTolerance() *
+            _priceTolerance() * // here I used priceTolerance instead of price because priceTolerance is littler smaller than price and it will help to protect liquidation
             ltvPercent) /
-            PERCENTAGE_FACTOR -
+            PERCENTAGE_FACTOR /
+            (10 ** IWstETH(asset()).decimals()) -
             _totalETHDebtAmount();
 
         uint256 borrowETHAmount = desiredETHAmount > maximumBorrowableAmount
@@ -203,7 +208,7 @@ contract Strategy is IStrategy, AccessControl, ERC4626 {
         uint256 wstETHAmount
     ) internal returns (uint256 repaidETHAmount) {
         repaidETHAmount =
-            (wstETHAmount * _price()) /
+            (((wstETHAmount * _priceTolerance()))) / // here I use priceTolerance instead of price because of flash loan fees and it will be repaid with weth which are swaped via DEX
             (10 ** IWstETH(asset()).decimals());
         IAavePool(aavePool).flashLoanSimple(
             address(this),
@@ -219,8 +224,8 @@ contract Strategy is IStrategy, AccessControl, ERC4626 {
     function totalAssets() public view override returns (uint256) {
         return
             _totalWstETHCollateralAmount() -
-            ((_totalETHDebtAmount() * _price()) /
-                (10 ** IWstETH(asset()).decimals()));
+            ((_totalETHDebtAmount() * (10 ** IWstETH(asset()).decimals())) /
+                _price());
     }
 
     /// @notice Supply deposited WstETH to Aave Pool to increase collateral amount
@@ -333,11 +338,14 @@ contract Strategy is IStrategy, AccessControl, ERC4626 {
                 recipient: address(this),
                 deadline: block.timestamp,
                 amountIn: unwrapAmount,
-                amountOutMinimum: unwrapAmount * _priceTolerance(),
+                amountOutMinimum: (unwrapAmount * _priceTolerance()) /
+                    (10 ** IWstETH(asset()).decimals()),
                 sqrtPriceLimitX96: 0
             });
 
+        // console.log("*** unwrap/amountOut : ", amountOut);
         uint256 amountOut = ISwapRouter(swapRouter).exactInputSingle(params);
+        // console.log("*** unwrap/amountOut : ", amountOut);
 
         return amountOut;
     }
