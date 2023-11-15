@@ -1,27 +1,29 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.20;
-pragma experimental ABIEncoderV2;
 
-interface ILendingPool {
+interface IAavePool {
     struct ReserveConfigurationMap {
         uint256 data;
     }
     struct ReserveData {
         ReserveConfigurationMap configuration;
         uint128 liquidityIndex;
-        uint128 variableBorrowIndex;
         uint128 currentLiquidityRate;
+        uint128 variableBorrowIndex;
         uint128 currentVariableBorrowRate;
         uint128 currentStableBorrowRate;
         uint40 lastUpdateTimestamp;
+        uint16 id;
         address aTokenAddress;
         address stableDebtTokenAddress;
         address variableDebtTokenAddress;
         address interestRateStrategyAddress;
-        uint8 id;
+        uint128 accruedToTreasury;
+        uint128 unbacked;
+        uint128 isolationModeTotalDebt;
     }
 
-    function deposit(
+    function supply(
         address asset,
         uint256 amount,
         address onBehalfOf,
@@ -45,21 +47,23 @@ interface ILendingPool {
     function repay(
         address asset,
         uint256 amount,
-        uint256 rateMode,
+        uint256 interestRateMode,
         address onBehalfOf
     ) external returns (uint256);
-
-    function flashLoan(
-        address receiverAddress,
-        address[] calldata assets,
-        uint256[] calldata amounts,
-        uint256[] calldata modes,
-        address onBehalfOf,
-        bytes calldata params,
-        uint16 referralCode
-    ) external;
 
     function getReserveData(
         address asset
     ) external view returns (ReserveData memory);
+
+    function getConfiguration(
+        address asset
+    ) external view returns (ReserveConfigurationMap memory);
+
+    function flashLoanSimple(
+        address receiverAddress,
+        address asset,
+        uint256 amount,
+        bytes calldata params,
+        uint16 referralCode
+    ) external;
 }
